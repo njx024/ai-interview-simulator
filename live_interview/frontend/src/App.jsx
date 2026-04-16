@@ -1,7 +1,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
-//import * as faceapi from "face-api.js";
 
 // ─────────────────────────────────────────────
 //  STATIC DEMO DATA  (zero network calls)
@@ -95,62 +94,7 @@ function App() {
     }
   }, [modelsLoaded]);
 
-  // ─── Load face-api models ───
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        await faceapi.nets.tinyFaceDetector.loadFromUri("/models/tiny_face_detector");
-        await faceapi.nets.faceExpressionNet.loadFromUri("/models/face_expression");
-        await faceapi.nets.faceLandmark68Net.loadFromUri("/models/face_landmark_68");
-        console.log("✅ ALL MODELS LOADED");
-        setModelsLoaded(true);
-      } catch (err) {
-        console.error("❌ Model loading error:", err);
-      }
-    };
-    loadModels();
-  }, []);
-
-  // ─── Face detection loop ───
-  useEffect(() => {
-    let interval;
-
-    const startDetection = () => {
-      interval = setInterval(async () => {
-        if (!videoRef.current) return;
-        if (videoRef.current.readyState !== 4) return;
-
-        const detections = await faceapi.detectSingleFace(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 })
-        );
-
-        console.log("Detection:", detections);
-
-        if (detections) {
-          setFaceDetected(true);
-          const exp = detections.expressions;
-          setFaceData((prev) => ({
-            frames: prev.frames + 1,
-            happy: prev.happy + (exp.happy || 0),
-            neutral: prev.neutral + (exp.neutral || 0),
-            sad: prev.sad + (exp.sad || 0),
-          }));
-        } else {
-          setFaceDetected(false);
-        }
-      }, 800);
-    };
-
-    if (stage === "interview" && modelsLoaded) {
-      videoRef.current.onloadeddata = () => {
-        startDetection();
-      };
-    }
-
-    return () => clearInterval(interval);
-  }, [stage, modelsLoaded]);
-
+ 
   // ─────────────────────────────────────────────
   //  SIMULATED API CALLS  (no network requests)
   // ─────────────────────────────────────────────
