@@ -1,375 +1,208 @@
 
-
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import * as faceapi from "face-api.js";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-
 function App() {
-  const [currentPage, setCurrentPage] = useState("home"); // "home", "setup", "interview", "contact"
-  const [stage, setStage] = useState("setup"); // "setup" or "interview"
+  const [currentPage, setCurrentPage] = useState("home");
+  const [stage, setStage] = useState("setup");
   const [modelsLoaded, setModelsLoaded] = useState(true);
   const [faceDetected, setFaceDetected] = useState(false);
-  const [faceData, setFaceData] = useState({
-  frames: 0,
-  happy: 0,
-  neutral: 0,
-  sad: 0
-});
 
-  // Setup states
+  const [faceData, setFaceData] = useState({
+    frames: 0,
+    happy: 0,
+    neutral: 0,
+    sad: 0
+  });
+
   const [file, setFile] = useState(null);
   const [skills, setSkills] = useState([]);
   const [experience, setExperience] = useState("fresher");
   const [questions, setQuestions] = useState([]);
 
-  // Interview states
   const videoRef = useRef(null);
   const [qIndex, setQIndex] = useState(0);
   const [micOn, setMicOn] = useState(false);
   const [audioStream, setAudioStream] = useState(null);
   const [volume, setVolume] = useState(0);
-  const [messageSent, setMessageSent] = useState(false);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
-  const [recordings, setRecordings] = useState({}); // { questionIndex: blob }
+
+  const [recordings, setRecordings] = useState({});
   const [currentAudioURL, setCurrentAudioURL] = useState(null);
-  const [answersText, setAnswersText] = useState({}); // { questionIndex: "transcribed text" }
+  const [answersText, setAnswersText] = useState({});
   const [reportData, setReportData] = useState(null);
-const [showDetails, setShowDetails] = useState(false);
   const [voiceAnalysis, setVoiceAnalysis] = useState({});
 
-
-
-  // Start camera only in interview stage
+  // ---------- CAMERA ----------
   useEffect(() => {
     if (stage === "interview") {
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: false })
+        .getUserMedia({ video: true })
         .then((stream) => {
           videoRef.current.srcObject = stream;
         })
-        .catch(() => alert("Could not access camera"));
+        .catch(() => alert("Camera access denied"));
     }
   }, [stage]);
+
+  // ---------- FACE MODELS ----------
   useEffect(() => {
-  if (modelsLoaded) {
-    console.log("UI should now show LOADED");
-  }
-}, [modelsLoaded]);
+    const loadModels = async () => {
+      try {
+        await faceapi.nets.tinyFaceDetector.loadFromUri("/models/tiny_face_detector");
+        await faceapi.nets.faceExpressionNet.loadFromUri("/models/face_expression");
+        setModelsLoaded(true);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    loadModels();
+  }, []);
 
+  // ---------- FACE DETECTION ----------
   useEffect(() => {
-  const loadModels = async () => {
-    try {
-      await faceapi.nets.tinyFaceDetector.loadFromUri("/models/tiny_face_detector");
-      await faceapi.nets.faceExpressionNet.loadFromUri("/models/face_expression");
-      await faceapi.nets.faceLandmark68Net.loadFromUri("/models/face_landmark_68");
+    let interval;
 
-      console.log("✅ ALL MODELS LOADED");
+    if (stage === "interview" && modelsLoaded) {
+      interval = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState !== 4) return;
 
-      setModelsLoaded(true);
-
-    } catch (err) {
-      console.error("❌ Model loading error:", err);
-    }
-  };
-
-  loadModels();
-}, []);
-
-useEffect(() => {
-  let interval;
-
-  const startDetection = () => {
-    interval = setInterval(async () => {
-      if (!videoRef.current) return;
-
-      // 🔥 VERY IMPORTANT CHECK
-      if (videoRef.current.readyState !== 4) return;
-
-      const detections = await faceapi
-        .detectSingleFace(
+        const detections = await faceapi.detectSingleFace(
           videoRef.current,
-          new faceapi.TinyFaceDetectorOptions({
-            inputSize: 224,
-            scoreThreshold: 0.3
-          })
+          new faceapi.TinyFaceDetectorOptions()
         );
 
+        setFaceDetected(!!detections);
+      }, 1000);
+    }
 
-      console.log("Detection:", detections);
+    return () => clearInterval(interval);
+  }, [stage, modelsLoaded]);
 
-      if (detections) {
-  setFaceDetected(true);
-
-  const exp = detections.expressions;
-
-  setFaceData(prev => ({
-    frames: prev.frames + 1,
-    happy: prev.happy + (exp.happy || 0),
-    neutral: prev.neutral + (exp.neutral || 0),
-    sad: prev.sad + (exp.sad || 0)
-  }));
-
-} else {
-  setFaceDetected(false);
-}
-    }, 800);
-  };
-
-  if (stage === "interview" && modelsLoaded) {
-    // ⏳ wait 2 seconds for video to initialize
-    videoRef.current.onloadeddata = () => {
-  startDetection();
-};
-  }
-
-  return () => clearInterval(interval);
-}, [stage, modelsLoaded]);
-
-  // -------- API Calls --------
+  // ---------- DEMO FUNCTIONS ----------
 
   const uploadResume = async () => {
     if (!file) {
-      alert("Please select a PDF resume first");
+      alert("Select a resume first");
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
+    await new Promise((r) => setTimeout(r, 1000));
 
-    const res = await fetch(`${API_URL}//upload_resume`, {
-      method: "POST",
-      body: formData,
-    });
+    setSkills(["React", "FastAPI", "AI"]);
+    setExperience("fresher");
 
-    const data = await res.json();
-    setSkills(data.skills || []);
-    setExperience(data.experience || "fresher");
+    alert("Resume uploaded!");
   };
 
   const generateQuestions = async () => {
-    const res = await fetch(`${API_URL}//generate_questions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        skills: skills,
-        experience: experience,
-      }),
-    });
+    await new Promise((r) => setTimeout(r, 1000));
 
-    const data = await res.json();
-    setQuestions(data.questions || []);
+    setQuestions([
+      "Tell me about yourself.",
+      "Explain a project you worked on.",
+      "What are your strengths?",
+      "Why should we hire you?",
+      "Describe a challenge you solved."
+    ]);
+
+    setStage("interview");
   };
-
-  // -------- TTS (Speak Question) --------
-  const speakQuestion = (text) => {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  useEffect(() => {
-    if (stage === "interview" && questions.length > 0) {
-      speakQuestion(questions[qIndex]);
-      setMicOn(false);
-      setVolume(0);
-    }
-  }, [stage, qIndex, questions]);
 
   const startMic = async () => {
-  try {
-
-    recordedChunksRef.current = [];
-
-setAnswersText((prev) => ({
-  ...prev,
-  [qIndex]: "",
-}));
-    const stream = await navigator.mediaDevices.getUserMedia({
-  audio: {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  },
-});
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     setAudioStream(stream);
     setMicOn(true);
 
-    recordedChunksRef.current = [];
     const mediaRecorder = new MediaRecorder(stream);
     mediaRecorderRef.current = mediaRecorder;
+    recordedChunksRef.current = [];
 
     mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) recordedChunksRef.current.push(e.data);
     };
 
     mediaRecorder.onstop = () => {
-  const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+      const fakeResponses = [
+        "I have worked on machine learning systems.",
+        "I built scalable web applications.",
+        "I enjoy solving complex problems.",
+        "I have strong analytical skills."
+      ];
 
-  // Save per question
-  setRecordings((prev) => ({
-    ...prev,
-    [qIndex]: blob,
-  }));
+      const text = fakeResponses[Math.floor(Math.random() * fakeResponses.length)];
 
-  // For demo playback
-  const url = URL.createObjectURL(blob);
-  setCurrentAudioURL(url);
-
-  // 🔥 Send to backend for speech-to-text
-  sendForTranscription(blob, qIndex);
-};
-
-    mediaRecorder.start(); // 🎤 START RECORDING NOW
-
-    // --------- Volume Meter (your existing code) ----------
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    const audioContext = new AudioContext();
-
-    if (audioContext.state === "suspended") {
-      await audioContext.resume();
-    }
-
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 1024;
-    source.connect(analyser);
-
-    const bufferLength = analyser.fftSize;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const updateVolume = () => {
-      analyser.getByteTimeDomainData(dataArray);
-      let sumSquares = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        const v = (dataArray[i] - 128) / 128;
-        sumSquares += v * v;
-      }
-      const rms = Math.sqrt(sumSquares / bufferLength);
-      const level = Math.min(rms * 400, 255);
-      setVolume(level);
-      requestAnimationFrame(updateVolume);
+      setAnswersText((prev) => ({
+        ...prev,
+        [qIndex]: text
+      }));
     };
 
-    updateVolume();
-  } catch (err) {
-    console.error("Mic error:", err);
-    alert("Could not access microphone");
-  }
-};
+    mediaRecorder.start();
+  };
 
   const stopRecording = () => {
-  if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-    mediaRecorderRef.current.stop();
-  }
-
-  if (audioStream) {
-    audioStream.getTracks().forEach((t) => t.stop());
-  }
-
-  setMicOn(false);
-};
-
-const handleContactSubmit = (e) => {
-  e.preventDefault();
-  setMessageSent(true);
-};
-
-const sendForTranscription = async (blob, questionIndex) => {
-  try {
-
-    const formData = new FormData();
-    formData.append("file", blob);
-    formData.append("index", questionIndex);
-
-    // STEP 1: TRANSCRIBE
-    const transcribeRes = await fetch(`${API_URL}//transcribe`, {
-      method: "POST",
-      body: formData
-    });
-
-    const transcribeData = await transcribeRes.json();
-
-const answerText = transcribeData.answer;
-
-// ✅ STORE VOICE ANALYSIS
-setVoiceAnalysis(prev => ({
-  ...prev,
-  [questionIndex]: transcribeData.voice_analysis
-}));
-
-    // STEP 2: Save text in UI
-    setAnswersText(prev => ({
-      ...prev,
-      [questionIndex]: answerText
-    }));
-
-    // STEP 3: SEND FOR EVALUATION
-    const evalRes = await fetch(`${API_URL}//evaluate_answer`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        index: questionIndex,
-        question: questions[questionIndex],
-        answer: answerText
-      })
-    });
-
-    const evalData = await evalRes.json();
-
-    console.log("Evaluation result:", evalData);
-
-  } catch (err) {
-    console.error("Transcription/Evaluation error:", err);
-  }
-};
-
-const getFaceAnalysis = () => {
-  // 🔥 Always generate a good random confidence (80–95)
-  const fakeConfidence = Math.floor(Math.random() * 11) + 80; 
-  // → 80 to 95
-
-  let fakeEmotion = "Confident 😊";
-
-  if (fakeConfidence > 88) {
-    fakeEmotion = "Highly Confident 😎";
-  } else if (fakeConfidence < 85) {
-    fakeEmotion = "Confident 🙂";
-  }
-
-  return {
-    dominantEmotion: fakeEmotion,
-    confidenceScore: fakeConfidence
+    mediaRecorderRef.current?.stop();
+    audioStream?.getTracks().forEach((t) => t.stop());
+    setMicOn(false);
   };
-};
+
+  const evaluateInterview = async () => {
+    await new Promise((r) => setTimeout(r, 1500));
+
+    setReportData({
+      score: 8,
+      summary: "Good performance with clear communication.",
+      suggestions: ["Be more concise", "Add examples"]
+    });
+
+    setCurrentPage("report");
+  };
+
+  // ---------- UI ----------
+
+  return (
+    <div className="App">
+      {currentPage === "home" && (
+        <>
+          <h1>AI Interview Simulator</h1>
+          <input type="file" onChange={(e) => setFile(e.target.files[0])} />
+          <button onClick={uploadResume}>Upload Resume</button>
+          <button onClick={generateQuestions}>Start Interview</button>
+        </>
+      )}
+
+      {stage === "interview" && (
+        <>
+          <video ref={videoRef} autoPlay width="300" />
+          <h2>{questions[qIndex]}</h2>
+
+          <button onClick={startMic}>Start</button>
+          <button onClick={stopRecording}>Stop</button>
+
+          <p>{answersText[qIndex]}</p>
+
+          <button onClick={() => setQIndex(qIndex + 1)}>Next</button>
+          <button onClick={evaluateInterview}>Finish</button>
+        </>
+      )}
+
+      {currentPage === "report" && reportData && (
+        <>
+          <h2>Report</h2>
+          <p>Score: {reportData.score}</p>
+          <p>{reportData.summary}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default App;
 
 
-
-const evaluateInterview = async () => {
-
-  try {
-
-    // ✅ STEP 1: Evaluate ALL answers
-    const faceAnalysis = getFaceAnalysis();
-
-    // ✅ STEP 2: Get final report
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const res = await fetch(`${API_URL}//final_report`);
-    const data = await res.json();
-
-    data.face_analysis = faceAnalysis;
-
-setReportData(data);
-setCurrentPage("report");
-
-  } catch (err) {
-    console.error("Final report error:", err);
-  }
-};
 
 
   // -------- Test Record (5 sec) --------
