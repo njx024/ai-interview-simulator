@@ -3,211 +3,375 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import * as faceapi from "face-api.js";
 
+// ─────────────────────────────────────────────
+//  STATIC DEMO DATA  (zero network calls)
+// ─────────────────────────────────────────────
+
+const DEMO_SKILLS = [
+  "Python", "Machine Learning", "Data Science", "SQL", "React",
+  "JavaScript", "Deep Learning", "Git",
+];
+
+const DEMO_QUESTIONS = [
+  "Can you explain the difference between supervised and unsupervised learning?",
+  "What is the purpose of a virtual environment in Python, and how do you create one?",
+  "Describe the steps you would take to clean a dataset before training a model.",
+  "How does a RESTful API work, and can you give an example of one you have built?",
+  "What are the key differences between SQL and NoSQL databases?",
+];
+
+const SAMPLE_ANSWERS = [
+  "Supervised learning uses labeled data to train a model, while unsupervised learning finds hidden patterns in unlabeled data.",
+  "A virtual environment isolates project dependencies. You create one using python -m venv venv and activate it with the activate script.",
+  "I first check for missing values, handle outliers, encode categorical variables, and normalize numerical features before splitting the data.",
+  "A RESTful API communicates over HTTP using standard methods like GET, POST, PUT, and DELETE. I built one using FastAPI that served ML predictions.",
+  "SQL databases are relational and use structured schemas, while NoSQL databases like MongoDB are flexible and scale horizontally.",
+  "I use cross-validation to avoid overfitting and tune hyperparameters with grid search or random search.",
+  "React uses a virtual DOM to efficiently update only the changed parts of the UI, improving rendering performance.",
+  "Git allows collaborative version control. I regularly use branches, pull requests, and merge strategies in team projects.",
+];
+
+const FEEDBACK_POOL = [
+  { strengths: "Clear explanation with good structure", weaknesses: "Could include a concrete example", improvement: "Add a real-world use case to strengthen your answer" },
+  { strengths: "Technically accurate response", weaknesses: "Answer was slightly brief", improvement: "Elaborate on edge cases or trade-offs" },
+  { strengths: "Good conceptual understanding", weaknesses: "Missed some advanced details", improvement: "Study deeper internals and best practices" },
+  { strengths: "Confident delivery with correct terminology", weaknesses: "Minor factual gaps", improvement: "Review documentation and practice with projects" },
+  { strengths: "Practical experience evident in answer", weaknesses: "Could structure answer more clearly", improvement: "Use the STAR method: Situation, Task, Action, Result" },
+];
+
+// ─────────────────────────────────────────────
+//  HELPER  – simulate async delay
+// ─────────────────────────────────────────────
+const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
 function App() {
-  const [currentPage, setCurrentPage] = useState("home");
-  const [stage, setStage] = useState("setup");
+  const [currentPage, setCurrentPage] = useState("home"); // "home" | "setup" | "interview" | "contact" | "report"
+  const [stage, setStage] = useState("setup"); // "setup" | "interview"
   const [modelsLoaded, setModelsLoaded] = useState(true);
   const [faceDetected, setFaceDetected] = useState(false);
-
   const [faceData, setFaceData] = useState({
     frames: 0,
     happy: 0,
     neutral: 0,
-    sad: 0
+    sad: 0,
   });
 
+  // Setup states
   const [file, setFile] = useState(null);
   const [skills, setSkills] = useState([]);
   const [experience, setExperience] = useState("fresher");
   const [questions, setQuestions] = useState([]);
 
+  // Interview states
   const videoRef = useRef(null);
   const [qIndex, setQIndex] = useState(0);
   const [micOn, setMicOn] = useState(false);
   const [audioStream, setAudioStream] = useState(null);
   const [volume, setVolume] = useState(0);
+  const [messageSent, setMessageSent] = useState(false);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
-
   const [recordings, setRecordings] = useState({});
-  const [currentAudioURL, setCurrentAudioURL] = useState(null);
   const [answersText, setAnswersText] = useState({});
   const [reportData, setReportData] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
   const [voiceAnalysis, setVoiceAnalysis] = useState({});
 
-  // ---------- CAMERA ----------
+  // ─── Camera: start only in interview stage ───
   useEffect(() => {
     if (stage === "interview") {
       navigator.mediaDevices
-        .getUserMedia({ video: true })
+        .getUserMedia({ video: true, audio: false })
         .then((stream) => {
           videoRef.current.srcObject = stream;
         })
-        .catch(() => alert("Camera access denied"));
+        .catch(() => alert("Could not access camera"));
     }
   }, [stage]);
 
-  // ---------- FACE MODELS ----------
+  useEffect(() => {
+    if (modelsLoaded) {
+      console.log("UI should now show LOADED");
+    }
+  }, [modelsLoaded]);
+
+  // ─── Load face-api models ───
   useEffect(() => {
     const loadModels = async () => {
       try {
         await faceapi.nets.tinyFaceDetector.loadFromUri("/models/tiny_face_detector");
         await faceapi.nets.faceExpressionNet.loadFromUri("/models/face_expression");
+        await faceapi.nets.faceLandmark68Net.loadFromUri("/models/face_landmark_68");
+        console.log("✅ ALL MODELS LOADED");
         setModelsLoaded(true);
       } catch (err) {
-        console.error(err);
+        console.error("❌ Model loading error:", err);
       }
     };
     loadModels();
   }, []);
 
-  // ---------- FACE DETECTION ----------
+  // ─── Face detection loop ───
   useEffect(() => {
     let interval;
 
-    if (stage === "interview" && modelsLoaded) {
+    const startDetection = () => {
       interval = setInterval(async () => {
-        if (!videoRef.current || videoRef.current.readyState !== 4) return;
+        if (!videoRef.current) return;
+        if (videoRef.current.readyState !== 4) return;
 
         const detections = await faceapi.detectSingleFace(
           videoRef.current,
-          new faceapi.TinyFaceDetectorOptions()
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 })
         );
 
-        setFaceDetected(!!detections);
-      }, 1000);
+        console.log("Detection:", detections);
+
+        if (detections) {
+          setFaceDetected(true);
+          const exp = detections.expressions;
+          setFaceData((prev) => ({
+            frames: prev.frames + 1,
+            happy: prev.happy + (exp.happy || 0),
+            neutral: prev.neutral + (exp.neutral || 0),
+            sad: prev.sad + (exp.sad || 0),
+          }));
+        } else {
+          setFaceDetected(false);
+        }
+      }, 800);
+    };
+
+    if (stage === "interview" && modelsLoaded) {
+      videoRef.current.onloadeddata = () => {
+        startDetection();
+      };
     }
 
     return () => clearInterval(interval);
   }, [stage, modelsLoaded]);
 
-  // ---------- DEMO FUNCTIONS ----------
+  // ─────────────────────────────────────────────
+  //  SIMULATED API CALLS  (no network requests)
+  // ─────────────────────────────────────────────
 
+  // A. Resume Upload – 1-second simulated delay, then set dummy skills + experience
   const uploadResume = async () => {
     if (!file) {
-      alert("Select a resume first");
+      alert("Please select a PDF resume first");
       return;
     }
-
-    await new Promise((r) => setTimeout(r, 1000));
-
-    setSkills(["React", "FastAPI", "AI"]);
-    setExperience("fresher");
-
-    alert("Resume uploaded!");
+    await delay(1000);
+    setSkills(DEMO_SKILLS);
+    setExperience("mid");
   };
 
+  // B. Question Generation – return static list immediately
   const generateQuestions = async () => {
-    await new Promise((r) => setTimeout(r, 1000));
-
-    setQuestions([
-      "Tell me about yourself.",
-      "Explain a project you worked on.",
-      "What are your strengths?",
-      "Why should we hire you?",
-      "Describe a challenge you solved."
-    ]);
-
-    setStage("interview");
+    await delay(600);
+    setQuestions(DEMO_QUESTIONS);
   };
 
+  // ─── TTS (Speak Question) ───
+  const speakQuestion = (text) => {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  useEffect(() => {
+    if (stage === "interview" && questions.length > 0) {
+      speakQuestion(questions[qIndex]);
+      setMicOn(false);
+      setVolume(0);
+    }
+  }, [stage, qIndex, questions]);
+
+  // ─── Start Mic ───
   const startMic = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    setAudioStream(stream);
-    setMicOn(true);
-
-    const mediaRecorder = new MediaRecorder(stream);
-    mediaRecorderRef.current = mediaRecorder;
-    recordedChunksRef.current = [];
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) recordedChunksRef.current.push(e.data);
-    };
-
-    mediaRecorder.onstop = () => {
-      const fakeResponses = [
-        "I have worked on machine learning systems.",
-        "I built scalable web applications.",
-        "I enjoy solving complex problems.",
-        "I have strong analytical skills."
-      ];
-
-      const text = fakeResponses[Math.floor(Math.random() * fakeResponses.length)];
+    try {
+      recordedChunksRef.current = [];
 
       setAnswersText((prev) => ({
         ...prev,
-        [qIndex]: text
+        [qIndex]: "",
       }));
-    };
 
-    mediaRecorder.start();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      setAudioStream(stream);
+      setMicOn(true);
+
+      recordedChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+
+      // C. Transcription – pick a random answer from the pool; no backend call
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+
+        setRecordings((prev) => ({
+          ...prev,
+          [qIndex]: blob,
+        }));
+
+        const url = URL.createObjectURL(blob);
+        // url stored but not used further – kept for feature parity
+        void url;
+
+        simulateTranscription(qIndex);
+      };
+
+      mediaRecorder.start();
+
+      // Volume meter
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContext();
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+
+      const bufferLength = analyser.fftSize;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const updateVolume = () => {
+        analyser.getByteTimeDomainData(dataArray);
+        let sumSquares = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = (dataArray[i] - 128) / 128;
+          sumSquares += v * v;
+        }
+        const rms = Math.sqrt(sumSquares / bufferLength);
+        const level = Math.min(rms * 400, 255);
+        setVolume(level);
+        requestAnimationFrame(updateVolume);
+      };
+
+      updateVolume();
+    } catch (err) {
+      console.error("Mic error:", err);
+      alert("Could not access microphone");
+    }
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    audioStream?.getTracks().forEach((t) => t.stop());
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (audioStream) {
+      audioStream.getTracks().forEach((t) => t.stop());
+    }
     setMicOn(false);
   };
 
-  const evaluateInterview = async () => {
-    await new Promise((r) => setTimeout(r, 1500));
+  // C. Simulated transcription + D. Simulated evaluation (all local, no fetch)
+  const simulateTranscription = (questionIndex) => {
+    const answerText = SAMPLE_ANSWERS[questionIndex % SAMPLE_ANSWERS.length];
 
-    setReportData({
-      score: 8,
-      summary: "Good performance with clear communication.",
-      suggestions: ["Be more concise", "Add examples"]
+    // Simulated voice analysis
+    const fakeVoice = {
+      word_count: answerText.split(" ").length,
+      filler_word_count: Math.floor(Math.random() * 2),
+      fillers_used: [],
+      confidence_level: ["High", "High", "Medium"][Math.floor(Math.random() * 3)],
+    };
+
+    setVoiceAnalysis((prev) => ({
+      ...prev,
+      [questionIndex]: fakeVoice,
+    }));
+
+    setAnswersText((prev) => ({
+      ...prev,
+      [questionIndex]: answerText,
+    }));
+
+    // D. Simulated evaluation stored implicitly in reportData later
+  };
+
+  // Face analysis helper (already local in original)
+  const getFaceAnalysis = () => {
+    const fakeConfidence = Math.floor(Math.random() * 11) + 80;
+    let fakeEmotion = "Confident 😊";
+    if (fakeConfidence > 88) {
+      fakeEmotion = "Highly Confident 😎";
+    } else if (fakeConfidence < 85) {
+      fakeEmotion = "Confident 🙂";
+    }
+    return { dominantEmotion: fakeEmotion, confidenceScore: fakeConfidence };
+  };
+
+  // E. Final Report – build entirely from local simulated data
+  const evaluateInterview = async () => {
+    const faceAnalysis = getFaceAnalysis();
+
+    await delay(3000);
+
+    // Build per-question detailed analysis from simulated data
+    const detailed = DEMO_QUESTIONS.map((q, i) => {
+      const feedback = FEEDBACK_POOL[i % FEEDBACK_POOL.length];
+      const score = Math.floor(Math.random() * 4) + 7; // 7–10
+      return {
+        question: q,
+        answer: answersText[i] || "(No answer recorded)",
+        voice_analysis: voiceAnalysis[i] || { confidence_level: "Medium" },
+        evaluation: {
+          score,
+          strengths: feedback.strengths,
+          weaknesses: feedback.weaknesses,
+          improvement: feedback.improvement,
+        },
+      };
     });
 
+    const totalScore = detailed.reduce((sum, d) => sum + d.evaluation.score, 0);
+    const technicalScore = parseFloat((totalScore / detailed.length).toFixed(2));
+
+    const confidenceCounts = detailed.map((d) => d.voice_analysis?.confidence_level);
+    const overallConfidence =
+      confidenceCounts.filter((c) => c === "High").length > detailed.length / 2
+        ? "High"
+        : confidenceCounts.filter((c) => c === "Low").length > detailed.length / 2
+          ? "Low"
+          : "Medium";
+
+    const report = {
+      technical_score: technicalScore,
+      confidence_level: overallConfidence,
+      strengths: [...new Set(detailed.map((d) => d.evaluation.strengths))],
+      weaknesses: [...new Set(detailed.map((d) => d.evaluation.weaknesses))],
+      detailed_analysis: detailed,
+      face_analysis: faceAnalysis,
+    };
+
+    setReportData(report);
     setCurrentPage("report");
   };
 
-  // ---------- UI ----------
+  const handleContactSubmit = (e) => {
+    e.preventDefault();
+    setMessageSent(true);
+  };
 
-  return (
-    <div className="App">
-      {currentPage === "home" && (
-        <>
-          <h1>AI Interview Simulator</h1>
-          <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-          <button onClick={uploadResume}>Upload Resume</button>
-          <button onClick={generateQuestions}>Start Interview</button>
-        </>
-      )}
-
-      {stage === "interview" && (
-        <>
-          <video ref={videoRef} autoPlay width="300" />
-          <h2>{questions[qIndex]}</h2>
-
-          <button onClick={startMic}>Start</button>
-          <button onClick={stopRecording}>Stop</button>
-
-          <p>{answersText[qIndex]}</p>
-
-          <button onClick={() => setQIndex(qIndex + 1)}>Next</button>
-          <button onClick={evaluateInterview}>Finish</button>
-        </>
-      )}
-
-      {currentPage === "report" && reportData && (
-        <>
-          <h2>Report</h2>
-          <p>Score: {reportData.score}</p>
-          <p>{reportData.summary}</p>
-        </>
-      )}
-    </div>
-  );
-}
-
-export default App;
-
-
-
-
-  // -------- Test Record (5 sec) --------
-  
-
+  // ─────────────────────────────────────────────
+  //  RENDER
+  // ─────────────────────────────────────────────
 
   // -------- HOME PAGE --------
   if (currentPage === "home") {
@@ -242,8 +406,8 @@ export default App;
                   Ace Your Next Interview with AI
                 </h1>
                 <p className="hero-subtitle">
-                  Transform your interview preparation with our cutting-edge AI platform. 
-                  Upload your resume, get personalized questions, and practice with real-time 
+                  Transform your interview preparation with our cutting-edge AI platform.
+                  Upload your resume, get personalized questions, and practice with real-time
                   video and audio feedback.
                 </p>
                 <button
@@ -255,15 +419,15 @@ export default App;
               </div>
 
               <div className="hero-visual">
-                <div className="floating-card" style={{top: '10px', left: '80px'}}>
+                <div className="floating-card" style={{ top: "10px", left: "80px" }}>
                   <span className="card-icon">📄</span>
                   <span> Upload Resume</span>
                 </div>
-                <div className="floating-card" style={{top: '150px', right: '90px'}}>
+                <div className="floating-card" style={{ top: "150px", right: "90px" }}>
                   <span className="card-icon">🤖</span>
                   <span>AI Analysis</span>
                 </div>
-                <div className="floating-card" style={{bottom: '10px', left: '80px'}}>
+                <div className="floating-card" style={{ bottom: "10px", left: "80px" }}>
                   <span className="card-icon">🎯</span>
                   <span>Get Hired</span>
                 </div>
@@ -363,7 +527,6 @@ export default App;
               <div className="contact-form">
                 <h2>Send us a Message</h2>
                 <form onSubmit={handleContactSubmit}>
-
                   <input
                     type="text"
                     placeholder="Your Name"
@@ -387,7 +550,6 @@ export default App;
                       ✅ Message sent successfully!
                     </p>
                   )}
-
                 </form>
               </div>
             </div>
@@ -476,7 +638,7 @@ export default App;
                   </div>
 
                   <div className="skills-section">
-                    <h3 style={{marginBottom: '1rem', color: '#2d3748'}}>Extracted Skills</h3>
+                    <h3 style={{ marginBottom: "1rem", color: "#2d3748" }}>Extracted Skills</h3>
                     <div className="skills-container">
                       {skills.map((s, i) => (
                         <span key={i} className="skill-tag">
@@ -526,7 +688,7 @@ export default App;
                   <button
                     onClick={() => setStage("interview")}
                     className="primary-button"
-                    style={{fontSize: '1.1rem', padding: '1.25rem 2rem'}}
+                    style={{ fontSize: "1.1rem", padding: "1.25rem 2rem" }}
                   >
                     🎤 Start Interview
                   </button>
@@ -542,168 +704,156 @@ export default App;
       </div>
     );
   }
+
   // -------- REPORT PAGE --------
-if (currentPage === "report") {
-  return (
-    <div className="app">
-      <nav className="navbar">
-        <div className="nav-container">
-          <div className="logo">
-            <span className="logo-icon">🤖</span>
-            AI Interview Pro
+  if (currentPage === "report") {
+    return (
+      <div className="app">
+        <nav className="navbar">
+          <div className="nav-container">
+            <div className="logo">
+              <span className="logo-icon">🤖</span>
+              AI Interview Pro
+            </div>
+          </div>
+        </nav>
+
+        <div className="main-content">
+          <div className="page-container">
+            <h1 style={{ marginBottom: "1.5rem" }}>Interview Report</h1>
+
+            {reportData && (
+              <div style={{ color: "#000" }}>
+
+                {/* 🔥 OVERALL PERFORMANCE */}
+                <div style={{
+                  background: "#f7fafc",
+                  padding: "1.5rem",
+                  borderRadius: "10px",
+                  marginBottom: "1.5rem",
+                }}>
+                  <h2>Overall Performance</h2>
+                  <p style={{ fontSize: "1.2rem", marginTop: "0.5rem" }}>
+                    <b>Technical Score:</b> {reportData.technical_score}/10
+                  </p>
+                  <p style={{ fontSize: "1.2rem" }}>
+                    <b>Confidence Level:</b> {reportData.confidence_level}
+                  </p>
+                </div>
+
+                {/* 🔥 FACE ANALYSIS */}
+                {reportData.face_analysis && (
+                  <div style={{
+                    background: "#e6fffa",
+                    padding: "1.5rem",
+                    borderRadius: "10px",
+                    marginBottom: "1.5rem",
+                  }}>
+                    <h2>Face Analysis</h2>
+                    <p><b>Emotion:</b> {reportData.face_analysis.dominantEmotion}</p>
+                    <p><b>Confidence Score:</b> {reportData.face_analysis.confidenceScore}%</p>
+                  </div>
+                )}
+
+                {/* 🔥 STRENGTHS */}
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <h3>Strengths</h3>
+                  <ul>
+                    {reportData.strengths.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* 🔥 WEAKNESSES */}
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <h3>Weaknesses</h3>
+                  <ul>
+                    {reportData.weaknesses.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* 🔥 IMPROVEMENTS */}
+                <div style={{ marginBottom: "1.5rem" }}>
+                  <h3>Improvements</h3>
+                  <ul>
+                    {reportData.detailed_analysis.map((d, i) =>
+                      d.evaluation?.improvement ? (
+                        <li key={i}>{d.evaluation.improvement}</li>
+                      ) : null
+                    )}
+                  </ul>
+                </div>
+
+                {/* 🔥 JOB RECOMMENDATION */}
+                <div style={{
+                  background: "#edf2f7",
+                  padding: "1rem",
+                  borderRadius: "8px",
+                  marginBottom: "1.5rem",
+                }}>
+                  <h3>Job Recommendation</h3>
+                  <p>
+                    {reportData.technical_score > 7
+                      ? "✅ You are ready for technical interviews!"
+                      : reportData.technical_score > 4
+                        ? "⚠️ You need some practice before interviews."
+                        : "❌ You need strong preparation before applying."}
+                  </p>
+                </div>
+
+                {/* 🔥 TOGGLE DETAILED ANALYSIS */}
+                <button
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="primary-button"
+                >
+                  {showDetails ? "Hide Detailed Analysis" : "View Detailed Analysis"}
+                </button>
+
+                {showDetails && (
+                  <div style={{ marginTop: "2rem" }}>
+                    <h2>Detailed Analysis</h2>
+                    {reportData.detailed_analysis.map((item, i) => (
+                      <div key={i} style={{
+                        border: "1px solid #ddd",
+                        padding: "1rem",
+                        marginBottom: "1rem",
+                        borderRadius: "8px",
+                        background: "#ffffff",
+                      }}>
+                        <p><b>Q{i + 1}:</b> {item.question}</p>
+                        <p><b>Your Answer:</b> {item.answer}</p>
+                        <p><b>Score:</b> {(item.evaluation?.score / 10 * 2).toFixed(2)}/2</p>
+                        <p><b>Confidence:</b> {item.voice_analysis?.confidence_level}</p>
+                        <p><b>Strength:</b> {item.evaluation?.strengths}</p>
+                        <p><b>Weakness:</b> {item.evaluation?.weaknesses}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+              </div>
+            )}
+
+            {/* 🔥 BACK BUTTON */}
+            <button
+              onClick={() => setCurrentPage("home")}
+              className="secondary-button"
+              style={{ marginTop: "2rem" }}
+            >
+              ⬅ Back to Home
+            </button>
           </div>
         </div>
-      </nav>
 
-      <div className="main-content">
-        <div className="page-container">
-
-          <h1 style={{ marginBottom: "1.5rem" }}>Interview Report</h1>
-
-          {reportData && (
-            <div style={{ color: "#000" }}>
-
-              {/* 🔥 OVERALL PERFORMANCE */}
-              <div style={{
-                background: "#f7fafc",
-                padding: "1.5rem",
-                borderRadius: "10px",
-                marginBottom: "1.5rem"
-              }}>
-                <h2>Overall Performance</h2>
-
-                <p style={{ fontSize: "1.2rem", marginTop: "0.5rem" }}>
-                  <b>Technical Score:</b> {reportData.technical_score}/10
-                </p>
-
-                <p style={{ fontSize: "1.2rem" }}>
-                  <b>Confidence Level:</b> {reportData.confidence_level}
-                </p>
-              </div>
-
-              {/* 🔥 FACE ANALYSIS */}
-{reportData.face_analysis && (
-  <div style={{
-    background: "#e6fffa",
-    padding: "1.5rem",
-    borderRadius: "10px",
-    marginBottom: "1.5rem"
-  }}>
-    <h2>Face Analysis</h2>
-
-    <p>
-      <b>Emotion:</b> {reportData.face_analysis.dominantEmotion}
-    </p>
-
-    <p>
-      <b>Confidence Score:</b> {reportData.face_analysis.confidenceScore}%
-    </p>
-  </div>
-)}
-
-              {/* 🔥 STRENGTHS */}
-              <div style={{ marginBottom: "1.5rem" }}>
-                <h3>Strengths</h3>
-                <ul>
-                  {reportData.strengths.map((s, i) => (
-                    <li key={i}>{s}</li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* 🔥 WEAKNESSES */}
-              <div style={{ marginBottom: "1.5rem" }}>
-                <h3>Weaknesses</h3>
-                <ul>
-                  {reportData.weaknesses.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* 🔥 IMPROVEMENTS */}
-              <div style={{ marginBottom: "1.5rem" }}>
-                <h3>Improvements</h3>
-                <ul>
-                  {reportData.detailed_analysis.map((d, i) => (
-                    d.evaluation?.improvement && (
-                      <li key={i}>{d.evaluation.improvement}</li>
-                    )
-                  ))}
-                </ul>
-              </div>
-
-              {/* 🔥 JOB RECOMMENDATION */}
-              <div style={{
-                background: "#edf2f7",
-                padding: "1rem",
-                borderRadius: "8px",
-                marginBottom: "1.5rem"
-              }}>
-                <h3>Job Recommendation</h3>
-                <p>
-                  {reportData.technical_score > 7
-                    ? "✅ You are ready for technical interviews!"
-                    : reportData.technical_score > 4
-                    ? "⚠️ You need some practice before interviews."
-                    : "❌ You need strong preparation before applying."}
-                </p>
-              </div>
-
-              {/* 🔥 BUTTON FOR DETAILS */}
-              <button
-                onClick={() => setShowDetails(!showDetails)}
-                className="primary-button"
-              >
-                {showDetails ? "Hide Detailed Analysis" : "View Detailed Analysis"}
-              </button>
-
-              {/* 🔥 DETAILED ANALYSIS */}
-              {showDetails && (
-                <div style={{ marginTop: "2rem" }}>
-                  <h2>Detailed Analysis</h2>
-
-                  {reportData.detailed_analysis.map((item, i) => (
-                    <div key={i} style={{
-                      border: "1px solid #ddd",
-                      padding: "1rem",
-                      marginBottom: "1rem",
-                      borderRadius: "8px",
-                      background: "#ffffff"
-                    }}>
-                      <p><b>Q{i + 1}:</b> {item.question}</p>
-                      <p><b>Your Answer:</b> {item.answer}</p>
-                      <p><b>Score:</b> {(item.evaluation?.score / 10 * 2).toFixed(2)}/2</p>
-                      <p><b>Confidence:</b> {item.voice_analysis?.confidence_level}</p>
-
-                      <p><b>Strength:</b> {item.evaluation?.strengths}</p>
-                      <p><b>Weakness:</b> {item.evaluation?.weaknesses}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-            </div>
-          )}
-
-          {/* 🔥 BACK BUTTON */}
-          <button
-            onClick={() => setCurrentPage("home")}
-            className="secondary-button"
-            style={{ marginTop: "2rem" }}
-          >
-            ⬅ Back to Home
-          </button>
-
+        <div className="footer">
+          <p>© 2024 AI Interview Pro</p>
         </div>
       </div>
-
-      <div className="footer">
-        <p>© 2024 AI Interview Pro</p>
-      </div>
-    </div>
-  );
-}
+    );
+  }
 
   // -------- INTERVIEW SCREEN --------
   return (
@@ -738,10 +888,10 @@ if (currentPage === "report") {
                 playsInline
                 className="video-feed"
               />
-                <div className="status-bar">
-  {modelsLoaded && "✅ Models Loaded"}
-  {faceDetected && "👤 Face Detected"}
-</div>
+              <div className="status-bar">
+                {modelsLoaded && "✅ Models Loaded"}
+                {faceDetected && "👤 Face Detected"}
+              </div>
               <div className="video-overlay">
                 <span className="recording-indicator">● REC</span>
               </div>
@@ -753,57 +903,56 @@ if (currentPage === "report") {
                 <h3>Current Question</h3>
                 <p className="question-text">{questions[qIndex]}</p>
                 {answersText[qIndex] && (
-  <div
-    style={{
-      marginTop: "1rem",
-      padding: "1rem",
-      background: "#f7fafc",
-      borderRadius: "8px",
-      color: "#000",   // 👈 add this
-    }}
-  >
-    <strong>Your Answer (Text):</strong>
-    <p>{answersText[qIndex]}</p>
-  </div>
-)}
+                  <div
+                    style={{
+                      marginTop: "1rem",
+                      padding: "1rem",
+                      background: "#f7fafc",
+                      borderRadius: "8px",
+                      color: "#000",
+                    }}
+                  >
+                    <strong>Your Answer (Text):</strong>
+                    <p>{answersText[qIndex]}</p>
+                  </div>
+                )}
               </div>
 
               <div className="controls-section">
-              {!micOn ? (
-                <>
-                  <button onClick={startMic} className="mic-button start">
-                    <span className="mic-icon">🎙️</span>
-                    Start Answer
-                  </button>
-
-                  {recordings[qIndex] && (
-                    <button
-                      onClick={() => {
-                        const url = URL.createObjectURL(recordings[qIndex]);
-                        const audio = new Audio(url);
-                        audio.play();
-                      }}
-                      className="secondary-button"
-                      style={{ marginTop: "1rem" }}
-                    >
-                      🎧 Play Your Answer
+                {!micOn ? (
+                  <>
+                    <button onClick={startMic} className="mic-button start">
+                      <span className="mic-icon">🎙️</span>
+                      Start Answer
                     </button>
-                  )}
-                </>
-              ) : (
-                <div className="mic-active">
-                  <div className="mic-status">
-                    <span className="pulse-dot"></span>
-                    <span>Recording your answer...</span>
+
+                    {recordings[qIndex] && (
+                      <button
+                        onClick={() => {
+                          const url = URL.createObjectURL(recordings[qIndex]);
+                          const audio = new Audio(url);
+                          audio.play();
+                        }}
+                        className="secondary-button"
+                        style={{ marginTop: "1rem" }}
+                      >
+                        🎧 Play Your Answer
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="mic-active">
+                    <div className="mic-status">
+                      <span className="pulse-dot"></span>
+                      <span>Recording your answer...</span>
+                    </div>
+
+                    <button onClick={stopRecording} className="secondary-button">
+                      ⏹ Stop Recording
+                    </button>
                   </div>
-
-                  <button onClick={stopRecording} className="secondary-button">
-                    ⏹ Stop Recording
-                  </button>
-                </div>
-              )}
-            </div>
-
+                )}
+              </div>
 
               <div className="navigation-buttons">
                 <button
@@ -827,13 +976,10 @@ if (currentPage === "report") {
                 >
                   Next →
                 </button>
-
               </div>
 
               {qIndex === questions.length - 1 && (
-                <button className="finish-button"
-                  onClick={evaluateInterview}
-                  >
+                <button className="finish-button" onClick={evaluateInterview}>
                   Finish Interview
                 </button>
               )}
