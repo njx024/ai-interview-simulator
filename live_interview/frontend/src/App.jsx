@@ -1,7 +1,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
-import * as faceapi from "face-api.js";
+//import * as faceapi from "face-api.js";
 
 // ─────────────────────────────────────────────
 //  STATIC DEMO DATA  (zero network calls)
