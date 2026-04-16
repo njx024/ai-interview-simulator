@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import * as faceapi from "face-api.js";
 
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
 function App() {
   const [currentPage, setCurrentPage] = useState("home"); // "home", "setup", "interview", "contact"
   const [stage, setStage] = useState("setup"); // "setup" or "interview"
@@ -137,7 +139,7 @@ useEffect(() => {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch("http://localhost:8000/upload_resume", {
+    const res = await fetch(`${API_URL}//upload_resume`, {
       method: "POST",
       body: formData,
     });
@@ -148,7 +150,7 @@ useEffect(() => {
   };
 
   const generateQuestions = async () => {
-    const res = await fetch("http://localhost:8000/generate_questions", {
+    const res = await fetch(`${API_URL}//generate_questions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -283,7 +285,7 @@ const sendForTranscription = async (blob, questionIndex) => {
     formData.append("index", questionIndex);
 
     // STEP 1: TRANSCRIBE
-    const transcribeRes = await fetch("http://localhost:8000/transcribe", {
+    const transcribeRes = await fetch(`${API_URL}//transcribe`, {
       method: "POST",
       body: formData
     });
@@ -305,7 +307,7 @@ setVoiceAnalysis(prev => ({
     }));
 
     // STEP 3: SEND FOR EVALUATION
-    const evalRes = await fetch("http://localhost:8000/evaluate_answer", {
+    const evalRes = await fetch(`${API_URL}//evaluate_answer`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -356,7 +358,7 @@ const evaluateInterview = async () => {
 
     // ✅ STEP 2: Get final report
     await new Promise(resolve => setTimeout(resolve, 3000));
-    const res = await fetch("http://localhost:8000/final_report");
+    const res = await fetch(`${API_URL}//final_report`);
     const data = await res.json();
 
     data.face_analysis = faceAnalysis;
